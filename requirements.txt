@@ -1,9 +1,6 @@
-nonebot2
+nonebot2[websockets]
 nonebot-adapter-onebot
-openai-whisper
+faster-whisper
 dashscope
-requests
-urllib3
 aiohttp
-ffmpeg-python
 python-dotenv
