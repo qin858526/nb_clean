@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+venv/
+.venv/
+
+# 临时文件
+bilibili_temp/
+bilibili_audio/
+*.swp
+*.swo
+
+# 环境配置（含API Key）
+.env
+
+# 系统文件
+Thumbs.db
+.DS_Store

@@ -1,0 +1,9 @@
+nonebot2
+nonebot-adapter-onebot
+openai-whisper
+dashscope
+requests
+urllib3
+aiohttp
+ffmpeg-python
+python-dotenv
