@@ -15,9 +15,8 @@ import ssl
 import asyncio
 import urllib3
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
 
-# 异步HTTP替换同步requests
+# 异步HTTP
 import aiohttp
 # NoneBot核心模块
 import nonebot
@@ -25,8 +24,6 @@ from nonebot import on_message, logger, get_driver
 from nonebot.adapters.onebot.v11 import Bot, MessageEvent, Message
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 from nonebot.rule import Rule
-from nonebot.params import EventPlainText
-from pydantic import BaseModel, Field
 
 # ===================== 基础配置（必改）=====================
 # 从 .env 读取阿里云百炼API Key（必填）
@@ -42,39 +39,21 @@ SAVE_DIR.mkdir(exist_ok=True)
 COOL_DOWN_TIME = 6
 # B站Cookie（可选，提升版权视频成功率）
 BILIBILI_COOKIE = ""
-# NapCat WS服务端地址（核心！对接NapCat）
-NAPCAT_WS_URL = "ws://127.0.0.1:6099"
+# NapCat WS服务端地址（从.env读取，默认127.0.0.1:6099）
+NAPCAT_WS_URL = os.getenv("NAPCAT_WS_URL", "ws://127.0.0.1:6099")
 # ==========================================================
 
-# 禁用SSL警告（异步+同步都生效）
+# 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# ===================== NapCat对接配置（核心修正）=====================
-class BotConfig(BaseModel):
-    # NapCat OneBot V11反向WS配置
-    onebot_ws_reverse: list = Field(default=[
-        {
-            "enabled": True,
-            "url": NAPCAT_WS_URL,  # 指向NapCat服务端WS地址
-            "api": True,
-            "event": True,
-            "reconnect_interval": 3000
-        }
-    ])
-
-# ===================== NoneBot初始化（最简有效版）=====================
-import nonebot
-from nonebot import on_message, logger, get_driver
-
+# ===================== NoneBot初始化 =====================
 nonebot.init(
     driver="~websockets",
-    env_file=None  # 禁用.env，避免冲突
+    env_file=None
 )
 driver = get_driver()
 driver.register_adapter(OneBotV11Adapter)
-
-# 手动添加反向WS连接（绕过配置文件，强制生效）
 
 
 # ===================== B站API配置（异步改造）=====================
@@ -120,7 +99,26 @@ except ImportError:
 cool_down = {}
 cool_down_lock = asyncio.Lock()
 
-# ===================== 核心辅助函数（异步改造+规则优化）=====================
+# ===================== 全局 aiohttp 会话（复用连接，避免重复创建）=====================
+http_session = None
+
+async def get_http_session() -> aiohttp.ClientSession:
+    global http_session
+    if http_session is None:
+        http_session = aiohttp.ClientSession(
+            headers=HEADERS,
+            connector=aiohttp.TCPConnector(ssl=False),
+            timeout=aiohttp.ClientTimeout(total=15)
+        )
+    return http_session
+
+async def close_http_session():
+    global http_session
+    if http_session:
+        await http_session.close()
+        http_session = None
+
+# ===================== 核心辅助函数 ======================
 def get_raw_message_from_event(event: MessageEvent) -> str:
     """提取原始消息（保留CQ码）"""
     if hasattr(event, "_json"):
@@ -132,24 +130,6 @@ def get_raw_message_from_event(event: MessageEvent) -> str:
     event_dict = event.model_dump()
     return event_dict.get("raw_message", "") or event_dict.get("message", "")
 
-def parse_cq_codes(full_msg_str: str, self_id: str) -> tuple[str, bool]:
-    """解析CQ码：引用ID + @机器人状态"""
-    reply_id = ""
-    is_at_me = False
-
-    # 匹配引用消息
-    reply_match = re.search(r"\[CQ:reply,id=(\d+)\]|\[reply:id=(\d+)\]", full_msg_str)
-    if reply_match:
-        reply_id = reply_match.group(1) or reply_match.group(2)
-
-    # 匹配@机器人
-    at_match = re.search(r"\[CQ:at,qq=(\d+)\]|\[at:qq=(\d+)\]", full_msg_str)
-    if at_match:
-        at_qq = at_match.group(1) or at_match.group(2)
-        if at_qq == self_id:
-            is_at_me = True
-
-    return reply_id, is_at_me
 
 async def resolve_b23_short_url(short_url: str) -> str:
     """异步解析b23短链接"""
@@ -158,15 +138,13 @@ async def resolve_b23_short_url(short_url: str) -> str:
         if not short_url.startswith(("http://", "https://")):
             short_url = f"https://{short_url}"
 
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
-            async with session.head(
-                short_url,
-                headers=HEADERS,
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                logger.info(f"✅ b23短链接跳转：{short_url} → {resp.url}")
-                return str(resp.url)
+        session = await get_http_session()
+        async with session.head(
+            short_url,
+            allow_redirects=True
+        ) as resp:
+            logger.info(f"✅ b23短链接跳转：{short_url} → {resp.url}")
+            return str(resp.url)
     except Exception as e:
         logger.error(f"❌ 解析b23短链接失败：{str(e)}")
         return short_url
@@ -215,14 +193,10 @@ def extract_bv_and_page(msg: str) -> tuple[str, int]:
 async def get_video_info_by_api(bvid: str) -> dict:
     """异步获取视频信息"""
     try:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
-            async with session.get(
-                BVID_INFO_API.format(bvid=bvid),
-                headers=HEADERS,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        session = await get_http_session()
+        async with session.get(BVID_INFO_API.format(bvid=bvid)) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
 
         if data["code"] != 0:
             return {"success": False, "msg": f"B站接口错误：{data['message']}"}
@@ -266,15 +240,10 @@ async def get_audio_url_by_api(bvid: str, cid: int) -> str:
         "high_quality": 1
     }
     try:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
-            async with session.get(
-                PLAY_URL_API,
-                params=params,
-                headers=HEADERS,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        session = await get_http_session()
+        async with session.get(PLAY_URL_API, params=params) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
 
         if data["code"] != 0:
             logger.error(f"【错误】B站音频接口返回：{data['message']}（cid={cid}）")
@@ -377,13 +346,9 @@ async def audio_to_subtitle(audio_path: str) -> str:
 async def get_danmaku_by_api(cid: int) -> str:
     """异步获取弹幕"""
     try:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
-            async with session.get(
-                DANMAKU_API.format(cid=cid),
-                headers=HEADERS,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                text = await resp.text(encoding="utf-8")
+        session = await get_http_session()
+        async with session.get(DANMAKU_API.format(cid=cid)) as resp:
+            text = await resp.text(encoding="utf-8")
         dm_list = re.findall(r"<d[^>]*>(.*?)</d>", text, re.DOTALL)
         dm_list = list(set([dm.strip() for dm in dm_list if dm.strip()]))[:50]
         return "\n".join(dm_list) if dm_list else "无弹幕"
