@@ -715,4 +715,4 @@ bilibili_analysis_matcher = on_message(rule=Rule(), priority=5, block=True)
 bilibili_analysis_matcher.append_handler(handle_bilibili_analysis)
 
 if __name__ == "__main__":
-    nonebot.run(host="0.0.0.0", port=6099)
+    nonebot.run(host="0.0.0.0", port=8082)
