@@ -393,10 +393,10 @@ async def extract_bv_from_bilibili_miniprogram(cq_json_raw: str) -> str:
     """从 QQ 小程序卡片提取 BV 号（兼容 Android [CQ:json,...] 和 iOS [json:data=...] 两种格式）"""
     try:
         # Android 格式：[CQ:json,data={...}]
-        json_match = re.search(r"\[CQ:json,data=(.*?)\]", cq_json_raw)
+        json_match = re.search(r"\[CQ:json,data=(.*?)\]", cq_json_raw, re.DOTALL)
         if not json_match:
-            # iOS 格式：[json:data={...}]
-            json_match = re.search(r"\[json:data=(.*)\]", cq_json_raw)
+            # iOS 格式：[json:data={...}]（含换行符，需 DOTALL）
+            json_match = re.search(r"\[json:data=(.*)\]", cq_json_raw, re.DOTALL)
         if not json_match:
             return ""
 
@@ -405,6 +405,7 @@ async def extract_bv_from_bilibili_miniprogram(cq_json_raw: str) -> str:
         json_str = json_str.replace('\\"', '"').replace("\\/", "/")
 
         data = json.loads(json_str)
+        logger.info(f"📱 小程序 JSON: {json_str[:200]}...")
 
         # Android 小程序格式：meta.detail_1.qqdocurl → b23.tv 短链接
         qqdocurl = data.get("meta", {}).get("detail_1", {}).get("qqdocurl", "")
