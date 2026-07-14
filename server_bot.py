@@ -237,18 +237,11 @@ PLAY_URL_API = "https://api.bilibili.com/x/player/playurl"
 DANMAKU_API = "https://api.bilibili.com/x/v1/dm/list.so?oid={cid}"
 
 # ===================== B站字幕获取 =====================
-def _subtitle_matches_title(subtitle_text: str, title: str) -> bool:
-    """检查 AI 字幕是否与标题相关（提取标题关键词做交叉验证）"""
-    tokens = re.findall(r'[一-鿿]{2,}|[a-zA-Z]{2,}', title)
-    if not tokens:
-        return True  # 标题太短无法提取关键词，默认信任
-    return any(t.lower() in subtitle_text.lower() for t in tokens)
 
-
-async def get_bilibili_subtitle(bvid: str, cid: int, title: str = "") -> tuple[bool, str]:
-    """获取 B站视频字幕文本（player/wbi/v2 + WBI 签名 + 相关性校验）
+async def get_bilibili_subtitle(bvid: str, cid: int) -> tuple[bool, str]:
+    """获取 B站视频字幕文本（player/wbi/v2 + WBI 签名）
     返回: (True, 字幕文本) | (False, "no_subtitle"|"download_failed")
-    - no_subtitle: 确认无字幕/字幕不相关，可降级转写
+    - no_subtitle: 确认无字幕，可降级转写
     - download_failed: 有字幕但下载失败，提示用户重试
     """
     if not BILIBILI_COOKIE:
@@ -322,12 +315,6 @@ async def get_bilibili_subtitle(bvid: str, cid: int, title: str = "") -> tuple[b
             body = sub_data.get("body", [])
             text = " ".join(item.get("content", "") for item in body)
             logger.info(f"📺 {bvid}: 下载成功 ({len(text)} 字符, {len(body)} 片段)")
-
-            # 3. AI 字幕做相关性校验（CC 字幕人工上传，无需校验）
-            if sub_type == "AI" and title and not _subtitle_matches_title(text, title):
-                logger.warning(f"📺 {bvid}: AI 字幕与标题不相关，丢弃")
-                await asyncio.sleep(1)
-                continue
 
             if len(text) > best_len:
                 best_text = text
@@ -889,7 +876,7 @@ async def _do_analyze(event: MessageEvent, bot: Bot):
             return
 
         duration = video_info.get("duration", 0)
-        subtitle_ok, subtitle_text = await get_bilibili_subtitle(bv_code, video_info["cid"], video_info["title"])
+        subtitle_ok, subtitle_text = await get_bilibili_subtitle(bv_code, video_info["cid"])
 
         if subtitle_ok:
             # ---- 有字幕：直接总结 ----
