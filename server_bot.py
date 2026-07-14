@@ -51,6 +51,8 @@ AUDIO_DOWNLOAD_TIMEOUT = 60          # FFmpeg 下载超时（秒）
 HTTP_TIMEOUT = 15                    # HTTP 请求超时（秒）
 
 SAVE_DIR = Path("./bilibili_temp")
+SUBTITLE_CACHE_DIR = SAVE_DIR / "subtitle_cache"
+SUBTITLE_CACHE_TTL = 259200  # 字幕缓存有效期（秒），3天内重复BV号直接用缓存
 BILIBILI_COOKIE = os.getenv("BILIBILI_COOKIE", "")  # B站完整登录Cookie（用于获取字幕，需包含buvid3/buvid4/bili_ticket等）
 
 # 输入长度硬限制（仅限制元数据字段，字幕不截断——DeepSeek 128K 上下文足够）
@@ -247,6 +249,19 @@ async def get_bilibili_subtitle(bvid: str, cid: int) -> tuple[bool, str]:
     if not BILIBILI_COOKIE:
         return (False, "no_subtitle")
 
+    # 0. 检查本地缓存（30分钟内重复BV号直接复用）
+    SUBTITLE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = SUBTITLE_CACHE_DIR / f"{bvid}.txt"
+    if cache_file.exists():
+        age = time.time() - cache_file.stat().st_mtime
+        if age < SUBTITLE_CACHE_TTL:
+            cached = cache_file.read_text(encoding="utf-8")
+            logger.info(f"📺 {bvid}: 命中字幕缓存（{age:.0f}秒前）→ {len(cached)} 字符")
+            return (True, cached)
+        else:
+            cache_file.unlink(missing_ok=True)
+            logger.info(f"📺 {bvid}: 字幕缓存已过期，重新获取")
+
     session = await get_http_session()
     found_subtitle = False
     best_text = ""
@@ -321,6 +336,7 @@ async def get_bilibili_subtitle(bvid: str, cid: int) -> tuple[bool, str]:
                 best_len = len(text)
 
             if len(text) >= 500:
+                cache_file.write_text(text, encoding="utf-8")
                 return (True, text)
 
             logger.info(f"📺 {bvid}: 内容较短 ({len(text)} 字符)，尝试重新获取...")
@@ -333,6 +349,7 @@ async def get_bilibili_subtitle(bvid: str, cid: int) -> tuple[bool, str]:
     # 重试用完
     if best_text:
         logger.info(f"📺 {bvid}: 使用最佳结果 ({best_len} 字符)")
+        cache_file.write_text(best_text, encoding="utf-8")
         return (True, best_text)
     if found_subtitle:
         logger.error(f"📺 {bvid}: 有字幕但全部下载失败")
@@ -889,12 +906,11 @@ async def _do_analyze(event: MessageEvent, bot: Bot):
                 danmaku=danmaku_text, subtitle=subtitle_text,
             )
             lines = [
-                f"🎬 视频总结（{bv_code} - 第{page_index}分P）：",
-                f"📌 视频标题：{video_info['title']}",
-                f"📝 核心总结：",
+                f"📺 {video_info['title']}",
+                "",
                 summary,
                 "",
-                f"💡 基于视频字幕 + 弹幕 + 简介",
+                f"—— 字幕+弹幕+简介  ·  {bv_code}",
             ]
             await napcat_send(event, f"{tip_prefix}{chr(10).join(lines)}")
             logger.info(f"✅ 字幕通道完成：{bv_code}")
@@ -949,12 +965,11 @@ async def _do_analyze(event: MessageEvent, bot: Bot):
             danmaku=danmaku_text, subtitle="无音频",
         )
         lines = [
-            f"🎬 视频总结（{bv_code} - 第{page_index}分P）：",
-            f"📌 视频标题：{video_info['title']}",
-            f"📝 核心总结：",
+            f"📺 {video_info['title']}",
+            "",
             summary_text,
             "",
-            f"💡 总结维度：弹幕 + 视频简介（无音频）",
+            f"—— 弹幕+简介（无音频）  ·  {bv_code}",
         ]
         await napcat_send(event, f"{tip_prefix}{chr(10).join(lines)}")
         return
@@ -971,13 +986,11 @@ async def _do_analyze(event: MessageEvent, bot: Bot):
             danmaku=danmaku_text, subtitle=sub_text,
         )
         lines = [
-            f"🎬 视频总结（{bv_code} - 第{page_index}分P）：",
-            f"📌 视频标题：{video_info['title']}",
-            f"📝 核心总结：",
+            f"📺 {video_info['title']}",
+            "",
             summary,
             "",
-            f"💡 基于语音转写 + 弹幕 + 视频简介",
-            f"⏱️ 语音转写耗时：{sub_time:.0f} 秒",
+            f"—— 语音转写+弹幕+简介  ·  {bv_code}  ·  转写{sub_time:.0f}秒",
         ]
         await napcat_send(event, f"{tip_prefix}{chr(10).join(lines)}")
     else:
