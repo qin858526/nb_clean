@@ -385,9 +385,13 @@ async def resolve_b23_short_url(short_url: str) -> str:
 
 
 async def extract_bv_from_bilibili_miniprogram(cq_json_raw: str) -> str:
-    """从 QQ 小程序卡片（[CQ:json,...]）提取 BV 号"""
+    """从 QQ 小程序卡片提取 BV 号（兼容 Android [CQ:json,...] 和 iOS [json:data=...] 两种格式）"""
     try:
+        # Android 格式：[CQ:json,data={...}]
         json_match = re.search(r"\[CQ:json,data=(.*?)\]", cq_json_raw)
+        if not json_match:
+            # iOS 格式：[json:data={...}]
+            json_match = re.search(r"\[json:data=(.*)\]", cq_json_raw)
         if not json_match:
             return ""
 
@@ -396,16 +400,39 @@ async def extract_bv_from_bilibili_miniprogram(cq_json_raw: str) -> str:
         json_str = json_str.replace('\\"', '"').replace("\\/", "/")
 
         data = json.loads(json_str)
-        qqdocurl = data.get("meta", {}).get("detail_1", {}).get("qqdocurl", "")
-        if not qqdocurl or "b23.tv" not in qqdocurl:
-            return ""
 
-        real_url = await resolve_b23_short_url(qqdocurl)
-        bv_match = re.search(r"BV([0-9a-zA-Z]{10})", real_url)
+        # Android 小程序格式：meta.detail_1.qqdocurl → b23.tv 短链接
+        qqdocurl = data.get("meta", {}).get("detail_1", {}).get("qqdocurl", "")
+        if qqdocurl and "b23.tv" in qqdocurl:
+            real_url = await resolve_b23_short_url(qqdocurl)
+            bv_match = re.search(r"BV([0-9a-zA-Z]{10})", real_url)
+            if bv_match:
+                bv_code = f"BV{bv_match.group(1)}"
+                logger.info(f"✅ 从小程序提取 BV 号：{bv_code}")
+                return bv_code
+
+        # iOS 格式或其他格式：直接在 JSON 里搜 URL 或 BV 号
+        json_dump = json.dumps(data, ensure_ascii=False)
+        bv_match = re.search(r"BV([0-9a-zA-Z]{10})", json_dump)
         if bv_match:
             bv_code = f"BV{bv_match.group(1)}"
-            logger.info(f"✅ 从小程序提取 BV 号：{bv_code}")
+            logger.info(f"✅ 从小程序 JSON 提取 BV 号：{bv_code}")
             return bv_code
+
+        # 搜 b23.tv 或 bilibili.com 链接
+        url_match = re.search(r"https?://(?:b23\.tv|www\.bilibili\.com)/\S+", json_dump)
+        if url_match:
+            url = url_match.group(0).rstrip('"\\')
+            if "b23.tv" in url:
+                real_url = await resolve_b23_short_url(url)
+            else:
+                real_url = url
+            bv_match = re.search(r"BV([0-9a-zA-Z]{10})", real_url)
+            if bv_match:
+                bv_code = f"BV{bv_match.group(1)}"
+                logger.info(f"✅ 从小程序 JSON 链接提取 BV 号：{bv_code}")
+                return bv_code
+
         return ""
     except Exception as e:
         logger.error(f"❌ 解析小程序失败：{e}")
@@ -839,9 +866,16 @@ async def _do_analyze(event: MessageEvent, bot: Bot):
                 if bv_code:
                     logger.info(f"📎 从引用消息中找到: {bv_code}")
             except Exception as e:
-                logger.warning(f"⚠️ 获取引用消息失败: {e}，尝试从消息文本中查找")
+                logger.warning(f"⚠️ 获取引用消息失败: {e}")
 
-        # 引用中没找到 → 从 @消息文本中找
+        # 引用没找到 → 尝试从事件原始 JSON 提取（涵盖 get_msg 失败的情况）
+        if not bv_code:
+            event_raw = get_raw_message_from_event(event)
+            bv_code = await extract_bv_from_bilibili_miniprogram(event_raw)
+            if bv_code:
+                logger.info(f"📎 从事件消息中提取: {bv_code}")
+
+        # 还没找到 → 纯文本正则匹配
         if not bv_code:
             bv_code, page_index = extract_bv_and_page(raw_msg)
             if bv_code:
