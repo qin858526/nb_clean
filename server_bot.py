@@ -118,6 +118,11 @@ _cool_down_cleanup_task: asyncio.Task | None = None
 
 # ===================== 任务排队 =====================
 _task_queue: asyncio.Queue = asyncio.Queue()  # 排队队列
+
+# ===================== 消息缓存（iOS分享消息get_msg不可用，主动缓存视频卡片）=====================
+_msg_cache: dict[int, str] = {}  # message_id → raw_message
+_msg_cache_lock = asyncio.Lock()
+_MSG_CACHE_MAX_SIZE = 200          # 最多缓存200条，满则顶替最旧的
 _is_processing = False                         # 是否正在处理
 _processing_lock = asyncio.Lock()              # 保护 _is_processing
 _current_bv = ""                               # 当前正在处理的 BV 号（用于排队提示）
@@ -769,6 +774,14 @@ async def handle_bilibili_analysis(event: MessageEvent, bot: Bot):
         f"📱 {message_type} | 🧑 {user_id} | 👥 {group_id}"
     )
 
+    # ---- 缓存视频分享消息（iOS 的 get_msg 不可用，主动缓存做兜底）----
+    raw_for_cache = get_raw_message_from_event(event)
+    if '[json:data=' in raw_for_cache or '[CQ:json,data=' in raw_for_cache or 'b23.tv' in raw_for_cache or 'BV' in raw_for_cache:
+        async with _msg_cache_lock:
+            _msg_cache[event.message_id] = raw_for_cache
+            while len(_msg_cache) > _MSG_CACHE_MAX_SIZE:
+                del _msg_cache[next(iter(_msg_cache))]
+
     # ---- 群聊规则：@机器人即可，BV号优先从引用消息中找 ----
     if is_group:
         is_at_me = any(
@@ -777,8 +790,7 @@ async def handle_bilibili_analysis(event: MessageEvent, bot: Bot):
         )
         # fallback: 用正则从原始消息解析（兼容 NapCat 的 [at:qq=] 格式）
         if not is_at_me:
-            raw = get_raw_message_from_event(event)
-            at_re = re.search(r"\[CQ:at,qq=(\d+)\]|\[at:qq=(\d+)\]", raw)
+            at_re = re.search(r"\[CQ:at,qq=(\d+)\]|\[at:qq=(\d+)\]", raw_for_cache)
             if at_re:
                 at_qq = at_re.group(1) or at_re.group(2)
                 is_at_me = (at_qq == self_id)
@@ -856,17 +868,26 @@ async def _do_analyze(event: MessageEvent, bot: Bot):
         reply_match = re.search(r"\[CQ:reply,id=(\d+)\]|\[reply:id=(\d+)\]", raw_msg)
         reply_id = int(reply_match.group(1) or reply_match.group(2)) if reply_match else 0
         if reply_id:
-            try:
-                quoted_msg = await napcat_get_msg(message_id=reply_id)
-                data = quoted_msg.get("data", {}) or {}
-                quoted_raw = str(data.get("raw_message", "") or data.get("message", "") or "")
+            # 优先查本地缓存（iOS 分享消息 get_msg 不可用）
+            async with _msg_cache_lock:
+                cached = _msg_cache.get(reply_id, "")
+            if cached:
+                quoted_raw = cached
+                logger.info(f"📎 从消息缓存中找到引用内容")
+            else:
+                try:
+                    quoted_msg = await napcat_get_msg(message_id=reply_id)
+                    data = quoted_msg.get("data", {}) or {}
+                    quoted_raw = str(data.get("raw_message", "") or data.get("message", "") or "")
+                except Exception as e:
+                    quoted_raw = ""
+                    logger.warning(f"⚠️ 获取引用消息失败: {e}")
+            if quoted_raw:
                 bv_code = await extract_bv_from_bilibili_miniprogram(quoted_raw)
                 if not bv_code:
                     bv_code, page_index = extract_bv_and_page(quoted_raw)
                 if bv_code:
                     logger.info(f"📎 从引用消息中找到: {bv_code}")
-            except Exception as e:
-                logger.warning(f"⚠️ 获取引用消息失败: {e}")
 
         # 引用没找到 → 尝试从事件原始 JSON 提取（涵盖 get_msg 失败的情况）
         if not bv_code:
