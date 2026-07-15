@@ -150,6 +150,15 @@ class BiliAnalyzer(Star):
         if not msg.group_id:
             return
 
+        # 静默缓存 B站相关消息（不管有没有@，先存，便于后续引用查询）
+        raw_text = _get_raw_text(event)
+        raw_to_cache = raw_text or event.message_str
+        if any(k in raw_to_cache for k in ("[json:data=", "[CQ:json,data=", "b23.tv", "BV")):
+            async with _msg_cache_lock:
+                _msg_cache[str(msg.message_id)] = raw_to_cache
+                while len(_msg_cache) > MSG_CACHE_MAX_SIZE:
+                    del _msg_cache[next(iter(_msg_cache))]
+
         bot_id = msg.self_id
 
         # 检查是否 @了机器人（优先检查 At 消息组件）
@@ -159,13 +168,12 @@ class BiliAnalyzer(Star):
         )
         # fallback：正则匹配 [CQ:at,...] / [at:...] 格式
         if not is_at_me:
-            raw_text = _get_raw_text(event)
             at_re = re.search(r"\[CQ:at,qq=(\d+)\]|\[at:qq=(\d+)\]", raw_text)
             if at_re:
                 is_at_me = (at_re.group(1) or at_re.group(2)) == bot_id
 
         if not is_at_me:
-            return  # 未 @机器人，不响应
+            return  # 未 @机器人，不响应（B站相关消息已缓存）
 
         event.stop_event()  # 阻止 LLM Agent 同时响应
         logger.info(f"群聊触发 | 群: {msg.group_id} | 用户: {event.get_sender_id()}")
@@ -290,14 +298,6 @@ class BiliAnalyzer(Star):
                 bv_code, page_index = extract_bv_and_page(raw_text or event.message_str)
                 if bv_code:
                     logger.info(f"从纯文本提取 BV: {bv_code}")
-
-            # 缓存含 B站内容的原始消息
-            raw_to_cache = raw_text or event.message_str
-            if any(k in raw_to_cache for k in ("BV", "b23.tv", "bilibili.com")):
-                async with _msg_cache_lock:
-                    _msg_cache[str(event.message_obj.message_id)] = raw_to_cache
-                    while len(_msg_cache) > MSG_CACHE_MAX_SIZE:
-                        del _msg_cache[next(iter(_msg_cache))]
         else:
             raw_text = _get_raw_text(event) or event.message_str
             bv_code = await extract_bv_from_any_text(raw_text, platform)
