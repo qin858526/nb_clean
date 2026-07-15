@@ -1,6 +1,5 @@
 nonebot2[websockets]
 nonebot-adapter-onebot
-faster-whisper
-dashscope
+openai-whisper
 aiohttp
 python-dotenv

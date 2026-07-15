@@ -1,0 +1,30 @@
+{
+    "bilibili_cookie": {
+        "type": "string",
+        "title": "B站 Cookie",
+        "description": "B站完整登录 Cookie（F12 → Application → Cookies → bilibili.com 复制全部），用于获取字幕",
+        "default": "",
+        "required": false
+    },
+    "deepseek_api_key": {
+        "type": "string",
+        "title": "DeepSeek API Key",
+        "description": "DeepSeek 平台 API Key（https://platform.deepseek.com/ 申请）",
+        "default": "",
+        "required": false
+    },
+    "deepseek_api_url": {
+        "type": "string",
+        "title": "DeepSeek API URL",
+        "description": "DeepSeek API 地址（默认官方地址，可替换为代理/中转）",
+        "default": "https://api.deepseek.com/v1/chat/completions",
+        "required": false
+    },
+    "deepseek_model": {
+        "type": "string",
+        "title": "DeepSeek 模型名",
+        "description": "使用的 DeepSeek 模型",
+        "default": "deepseek-v4-pro",
+        "required": false
+    }
+}

@@ -1,0 +1,23 @@
+# ============================================================
+# B站视频分析机器人 - 部署配置
+# 混合部署：Gewechat(Docker) + AstrBot(宿主机 pip)
+#
+# 为什么不用 Docker 跑 AstrBot：
+#   - whisper.cpp 在宿主机编译，Docker 内二进制可能不兼容
+#   - AstrBot pip 安装即可，简单可靠
+# ============================================================
+
+version: "3.8"
+
+services:
+  # ---- Gewechat：微信个人号协议端（必须 Docker）----
+  gewe:
+    image: xmoxmo/gewe:latest
+    container_name: gewe
+    ports:
+      - "2531:2531"
+      - "2532:2532"
+    volumes:
+      - ./gewe/temp:/root/temp
+    privileged: true
+    restart: always

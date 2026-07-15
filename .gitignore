@@ -19,6 +19,28 @@ bilibili_audio/
 # 环境配置（含API Key）
 .env
 
+# 上下文记录（含敏感信息）
+上下文记录_*
+
+# 部署脚本（含密码）
+deploy.py
+
+# 调试临时文件（仅根目录）
+/_*
+
+# 大文件
+*.whl
+*.gz
+Country.mmdb
+
+# Mihomo
+mihomo_*
+sub.yaml
+
+# 模型 & 字幕缓存
+whisper_*/
+subtitles/
+
 # 系统文件
 Thumbs.db
 .DS_Store

@@ -1,0 +1,4 @@
+name: astrbot_plugin_bilibili
+desc: B站视频分析插件 - 支持B站链接/BV号/小程序，自动获取字幕或语音转写后用AI总结视频内容
+version: 1.0.0
+author: Pear
